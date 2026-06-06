@@ -22,7 +22,6 @@ module rob_cam(
     input cdb_entry cdb_arr [0:CDB_SIZE - 1],
     input str_disp_entry str_rob [0:1],
     
-    output logic [3:0] amount_executed,
     output rob_entry output_arr [0:1],
     output logic [4:0] id_to_free [0:1]
 );
@@ -32,7 +31,8 @@ module rob_cam(
     logic [4:0] lut [0:31];
     logic lut_valid [0:31];
 
-    logic [4:0] head = 0, tail = 0, count = 0;
+    logic [4:0] head, head_p1, head_p2;
+    logic [4:0] tail, count;
 
     logic full;
 
@@ -60,7 +60,11 @@ module rob_cam(
     always_ff @ (posedge clk) begin
         if (rst) begin
             buffer <= '{default: '0};
+
             head <= '0;
+            head_p1 <= '0;
+            head_p2 <= '0;
+
             tail <= '0;
             count <= '0;
 
@@ -70,7 +74,6 @@ module rob_cam(
             lut <= '{default: '0};
             lut_valid <= '{default: '0};
 
-            amount_executed <= '0;
         end else begin
             // Inserts
             for (int i = 0; i < 2; i++) begin
@@ -109,16 +112,17 @@ module rob_cam(
                 end
             end
 
-            // Update head, tail, count, amount_executed
+            // Update head, tail, count
             head <= commit_head;
+            head_p1 <= (commit_head == 31) ? 0 : commit_head + 1;
+            head_p2 <= (commit_head >= 30) ? commit_head - 30 : commit_head + 2;
+
             tail <= insert_tail;
             count <= count + insert_count - commit_count;
-            amount_executed <= amount_executed + commit_count;
         end
     end
 
     // Insert block
-    // Might do count another way on FF
     always_comb begin
         insert_reqs = '{default: '0};
         insert_tail = tail;
@@ -148,23 +152,21 @@ module rob_cam(
         commit_head = head;
         commit_count = '0;
 
-        // Iteration 0 — reads directly from registered head
+        // Iteration 0 reads directly from registered head
         if (buffer[head].valid && buffer[head].done) begin
             commit_reqs[0].valid = 1;
             commit_reqs[0].idx = head;
             commit_reqs[0].id = buffer[head].id;
             commit_count = 1;
-            commit_head = (head == 31) ? 0 : head + 1;
+            commit_head = head_p1;
 
-            // Iteration 1 — only if iter 0 committed and wasn't a store
-            if (!buffer[head].is_store) begin
-                if (buffer[commit_head].valid && buffer[commit_head].done) begin
-                    commit_reqs[1].valid = 1;
-                    commit_reqs[1].idx = commit_head;
-                    commit_reqs[1].id = buffer[commit_head].id;
-                    commit_count = 2;
-                    commit_head = (commit_head == 31) ? 0 : commit_head + 1;
-                end
+            // Iteration 1 only happens if first commit happened, unrolled dependency
+            if (buffer[head_p1].valid && buffer[head_p1].done) begin
+                commit_reqs[1].valid = 1;
+                commit_reqs[1].idx = head_p1;
+                commit_reqs[1].id = buffer[head_p1].id;
+                commit_count = 2;
+                commit_head = head_p2;
             end
         end
     end
@@ -199,4 +201,3 @@ module rob_cam(
         end
     end
 endmodule
-
